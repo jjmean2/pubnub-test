@@ -1,0 +1,8 @@
+{
+    "__comment": "possible key: 'publishKey', 'subscribeKey', 'secretKey', 'uuid', 'authKey'",
+    "publishKey": "THIS_SHOULD_BE_PUBLISH_KEY",
+    "subscribeKey": "THIS_SHOULD_BE_SUBSCRIBE_KEY",
+    "secretKey": "THIS_SHOULD_BE_SECRET_KEY",
+    "uuid": "commandline-pubnub-test",
+    "authKey": "command-line-01"
+}

@@ -1,0 +1,640 @@
+#!/usr/bin/env node
+
+
+var functions = require('./.config/functions.js');
+for (let propertyOfFunctions in functions) {
+    if (!(propertyOfFunctions in global)) {
+        global[propertyOfFunctions] = functions[propertyOfFunctions];
+    }
+}
+
+var fs = require('fs');
+var PubNub = require('pubnub');
+var program = require('commander');
+var moment = require('moment');
+
+program
+    .command('subscribe [arguments...]')
+    .alias('sub')
+    .option('-c, --channels <values>', 'Channels to subscribe split with \',\'')
+    .option('-g, --channel-groups <value>', 'Channel groups to subscribe split with \'\'')
+    .option('-p, --with-presence', 'Subscribe with presence')
+    .option('-u, --uuid <value>', 'UUID')
+    .option('-k, --auth-key <auth_key>', 'Authentication key')
+    .option('--admin', 'Administration')
+    .action(function (args, options) {
+        try {
+
+            if (options.channels) {
+                var channels = options.channels.split(',');
+            }
+            if (options.channelGroups) {
+                var channelGroups = options.channelGroups.split(',');
+            }
+            if (options.withPresence) {
+                var withPresence = options.withPresence;
+            }
+
+            if (!channels && !channelGroups) {
+                throw new Error('Either channels(-c) or channel group(-g) should be specified!');
+            }
+            if (channels && channelGroups) {
+                throw new Error('Channels(-c) and channel group(-g) cannot be specified both!');
+            }
+
+            var pubnub = getPubnubInstanceWithUUIDAndAuthKeyIncludingSecretKey(options.uuid, options.authKey, options.admin || false);
+
+
+
+            var config = {};
+            if (channels) {
+                config.channels = channels;
+            }
+            if (channelGroups) {
+                config.channelGroups = channelGroups;
+            }
+            if (withPresence) {
+                config.withPresence = withPresence;
+            }
+
+            pubnub.addListener(getCallbackConfig(pubnub, config));
+
+            console.log('subscribing to channels [' + channels + ']' + (withPresence ? ' with Presence' : ''));
+            pubnub.subscribe(config);
+
+        } catch (e) {
+            console.log(e.message);
+            if (pubnub) {
+                console.log('stop pubnub', pubnub.stop);
+                pubnub.stop();
+            }
+        }
+    });
+
+program
+    .command('publish <channel>')
+    .alias('pub')
+    .option('-u, --uuid <value>', 'UUID')
+    .option('-k, --auth-key <auth_key>', 'Authentication key')
+    .option('-m, --message <message>', 'Messages to use as payload')
+    .option('-f, --file <file_name>', 'File name to use as payload')
+    .option('--admin', 'Administration')
+    .action(function (channel, options) {
+        try {
+            var pubnub = getPubnubInstanceWithUUIDAndAuthKeyIncludingSecretKey(options.uuid, options.authKey, options.admin || false);
+
+            var payload;
+
+            if (options.message) {
+                payload = options.message;
+            } else if (options.file) {
+                payload = JSON.parse(fs.readFileSync(options.file, 'utf8'));
+            } else {
+                throw new Error('No Message specified');
+            }
+
+            console.log('publishing to channel \'' + channel + '\'...');
+            console.log('==========================================================');
+            console.log('* Channel:\t', channel);
+            console.log('* Publisher:\t', pubnub.getUUID());
+            if (pubnub.getAuthKey())
+                console.log('* Auth-Key:\t', pubnub.getAuthKey());
+            console.log('* Sending Time:\t', moment().format('YYYY-MM-DD (ddd) HH:mm:ss.SSS Z'));
+            console.log("----- Sending Payload ------------------------------------");
+            console.log(payload);
+            console.log('==========================================================');
+            let message = {
+                channel: channel,
+                message: payload
+            };
+
+            pubnub.publish(message, function (status, response) {
+                if (!status.error) {
+                    console.log("Publish Success!!");
+                } else {
+                    console.log("Publish Failed with error", status.error);
+                }
+                logObject({ status: status, response: response });
+                console.log('');
+            })
+
+        } catch (e) {
+            console.log(e.message);
+        }
+
+    });
+
+
+program
+    .command('grant [authKeys...]')
+    .alias('gr')
+    .option('-c, --channels <values>', 'Channels to grant split with \',\'')
+    .option('-g, --channel-groups <value>', 'Channel groups to grant split with \'\'')
+    .option('-w, --write', 'Write permision')
+    .option('-r, --read', 'Read permision')
+    .option('-m, --manage', 'Manage permision')
+    .option('--no-admin', 'No Administration')
+    .action(function (authKeys, options) {
+        try {
+
+            if (options.channels) {
+                var channels = options.channels.split(',');
+            }
+            if (options.channelGroups) {
+                var channelGroups = options.channelGroups.split(',');
+            }
+
+            var pubnub = getPubnubInstanceWithUUIDAndAuthKeyIncludingSecretKey(undefined, undefined, !options.noAdmin);
+
+            console.log('granting to channel ' + channels + '...');
+            var config = {};
+            if (channels) config.channels = channels;
+            if (channelGroups) config.channelGroups = channelGroups;
+            if (authKeys) config.authKeys = authKeys;
+            config.read = !!options.read;
+            config.write = !!options.write;
+            config.manage = !!options.manage;
+            logObjectPretty(config, 'Grant Config for \'' + (channels || channelGroups) + '\'', undefined, 50);
+            // console.log(JSON.stringify(config, null, '\t'));
+
+            pubnub.grant(config, function (status) {
+                logObject({ status: status });
+            });
+        } catch (e) {
+            console.log(e.message);
+        }
+
+    });
+
+program.command('herenow [arguments...]')
+    .alias('hn')
+    .option('-c, --channels <value>', 'channels')
+    .option('-g, --channel-groups <value>', 'channel groups')
+    .option('-u, --uuid <value>', 'UUID')
+    .option('-k, --auth-key <auth_key>', 'Authentication key')
+    .option('--admin', 'Administration')
+    .action(function (args, options) {
+        try {
+            if (options.channels) {
+                var channels = options.channels.split(',');
+            }
+            if (options.channelGroups) {
+                var channelGroups = options.channelGroups.split(',');
+            }
+
+            if (!channels && !channelGroups) {
+                throw new Error('Either channels(-c) or channel group(-g) should be specified!');
+            }
+            if (channels && channelGroups) {
+                throw new Error('Channels(-c) and channel group(-g) cannot be specified both!');
+            }
+
+            var pubnub = getPubnubInstanceWithUUIDAndAuthKeyIncludingSecretKey(options.uuid, options.authKey, options.admin || false);
+
+
+            var config = {};
+            if (channels) {
+                config.channels = channels;
+            }
+            if (channelGroups) {
+                config.channelGroups = channelGroups;
+            }
+            config.includeUUIDs = true;
+            config.includeState = true;
+
+            pubnub.hereNow(config, function (status, response) {
+                logObject({ status: status, response: response });
+
+                if (response && response.channels) {
+
+                    console.log('* Channels:');
+
+                    logObjectPretty(response);
+                    // for (var channel in response.channels) {
+                    //     console.log(response.channels[channel]);
+                    // }
+                }
+            });
+
+        } catch (e) {
+            console.log(e.message);
+        }
+    });
+
+program.command('channel-group <channelGroup>')
+    .alias('cg')
+    .option('-l, --list', 'list channels')
+    .option('-a, --add <values>', 'add channels')
+    .option('-r, --remove <values>', 'remove channels')
+    .option('-d, --delete', 'delete channel group')
+    .option('-k, --auth-key <auth_key>', 'Authentication key')
+    .option('--admin', 'manage as Administration')
+    .action(function (channelGroup, options) {
+        try {
+            var pubnub = getPubnubInstanceWithUUIDAndAuthKeyIncludingSecretKey(undefined, options.authKey, options.admin || false);
+
+            if (options.add) {
+                var channelsToAdd = options.add.split(',');
+
+                pubnub.channelGroups.addChannels({
+                    channels: channelsToAdd,
+                    channelGroup: channelGroup
+                }, function (status) {
+                    console.log("Status:", status);
+                });
+            } else if (options.remove) {
+                var channelsToRemove = options.remove.split(',');
+
+                pubnub.channelGroups.removeChannels({
+                    channels: channelsToRemove,
+                    channelGroup: channelGroup
+                }, function (status) {
+                    logObject({ status: status });
+                });
+
+            } else if (options.delete) {
+                pubnub.channelGroups.deleteGroup({
+                    channelGroup: channelGroup
+                }, function (status) {
+                    logObject({ status: status });
+                });
+            } else {
+                pubnub.channelGroups.listChannels({
+                    channelGroup: channelGroup
+                }, function (status, response) {
+                    logObject({ status: status, response: response });
+
+                    if (!response) { return; }
+
+                    console.log(('=== Channels in \'' + channelGroup + '\' Channel Group ==============================================================').slice(0, 62));
+
+                    if (typeof response === 'object' && typeof response.channels === 'object' && response.channels.length > 0) {
+                        for (let channel of response.channels) {
+                            console.log('*', channel);
+                        }
+                    }
+                    console.log('==============================================================');
+                });
+            }
+
+
+
+
+        } catch (e) {
+            console.log(e.message);
+        }
+    });
+
+program.command('unsubscribe [arguments...]')
+    .alias('unsub')
+    .option('-c, --channels <values>', 'Channels to subscribe split with \',\'')
+    .option('-g, --channel-groups <value>', 'Channel groups to subscribe split with \'\'')
+    .option('-u, --uuid <value>', 'UUID')
+    .option('-a, --all', 'Unsubscribe all')
+    .option('-k, --auth-key <auth_key>', 'Authentication key')
+    .option('--admin', 'Administration')
+    .action(function (args, options) {
+        try {
+            if (options.channels) {
+                var channels = options.channels.split(',');
+            }
+            if (options.channelGroups) {
+                var channelGroups = options.channelGroups.split(',');
+            }
+            if (!channels && !channelGroups && !options.all) {
+                throw new Error('Either channels(-c) or channel group(-g) should be specified!');
+            }
+            if (channels && channelGroups) {
+                throw new Error('Channels(-c) and channel group(-g) cannot be specified both!');
+            }
+
+            var pubnub = getPubnubInstanceWithUUIDAndAuthKeyIncludingSecretKey(options.uuid, options.authKey, options.admin || false);
+
+            var config = {};
+            if (channels) config.channels = channels;
+            if (channelGroups) config.channelGroups = channelGroups;
+
+            var listener = getCallbackConfig(pubnub, config);
+            pubnub.addListener(listener);
+            if (options.all) {
+                pubnub.unsubscribeAll();
+                pubnub.stop();
+            } else {
+                pubnub.unsubscribe(config);
+            }
+
+        } catch (e) {
+            console.log(e.message);
+        }
+    });
+
+program.command('wherenow <uuid>')
+    .alias('wn')
+    .action(function (uuid, options) {
+        try {
+            var pubnub = getPubnubInstanceWithUUIDAndAuthKeyIncludingSecretKey();
+
+            console.log('whereNow for \'' + uuid + '\'');
+            pubnub.whereNow({
+                uuid: uuid
+            }, function (status, response) {
+                logObject({ status: status, response: response });
+                if (response) {
+                    logObjectPretty(response, 'Where Now UUID \'' + uuid + '\'');
+                }
+            });
+
+        } catch (e) {
+            console.log(e.message);
+        }
+    });
+
+program.command('history <channel>')
+    .alias('hs')
+    .option('-r, --reverse', 'Reverse history')
+    .option('-n, --number <count>', 'number of history')
+    .option('-s, --start <value>', 'start timetoken')
+    .option('-e, --end <value>', 'end timetoken')
+    .option('-k, --auth-key <auth_key>', 'Authentication key')
+    .option('--admin', 'Administration')
+    .action(function (channel, options) {
+        try {
+
+            console.log(+options.number);
+            var pubnub = getPubnubInstanceWithUUIDAndAuthKeyIncludingSecretKey(undefined, options.authKey, options.admin || false);
+
+            console.log('history for channel \'' + channel + '\'');
+
+            var config = {};
+            config.channel = channel;
+            config.reverse = !!options.reverse;
+            if (+options.number == +options.number) config.count = +options.number;
+            if (options.start) config.start = options.start;
+            if (options.end) config.end = options.end;
+
+            console.log(config);
+            pubnub.history(config, function (status, response) {
+                logObject({ status: status, response: response });
+
+                if (response && response.messages) {
+                    console.log("=== Messages List =================================================");
+                    for (let index in response.messages) {
+                        let message = response.messages[index];
+                        console.log("*******************************************************************");
+                        console.log('* Index:\t', ("000000" + index).slice(-6));
+                        console.log('* TimeToken:\t', message.timetoken);
+                        console.log('* Time:\t\t', moment(message.timetoken / 10000).format('YYYY-MM-DD (ddd) HH:mm:ss.SSS Z'));
+                        console.log('--- Entry ------------------------------------------------------');
+                        console.log(message.entry);
+                        // console.log('');
+                        console.log('----------------------------------------------------------------');
+                        console.log('');
+                    }
+                    console.log("===================================================================");
+
+                }
+            });
+
+        } catch (e) {
+            console.log(e.message);
+        }
+    });
+
+program.command('state <uuid>')
+    .option('-c, --channels <values>', 'Channels to subscribe split with \',\'')
+    .option('-g, --channel-groups <value>', 'Channel groups to subscribe split with \'\'')
+    .option('-s, --set <value>', 'state value to set')
+    .option('-f, --file <value>', 'state file to set')
+    .option('-k, --auth-key <auth_key>', 'Authentication key')
+    .option('--admin', 'Administration')
+    .action(function (uuid, options) {
+        try {
+
+            if (options.channels) {
+                var channels = options.channels.split(',');
+            }
+            if (options.channelGroups) {
+                var channelGroups = options.channelGroups.split(',');
+            }
+            if (!channels && !channelGroups) {
+                throw new Error('Either channels(-c) or channel group(-g) should be specified!');
+            }
+            if (channels && channelGroups) {
+                throw new Error('Channels(-c) and channel group(-g) cannot be specified both!');
+            }
+
+            var pubnub = getPubnubInstanceWithUUIDAndAuthKeyIncludingSecretKey(uuid, options.authKey, options.admin || false);
+
+            var config = {};
+            if (channels) config.channels = channels;
+            if (channelGroups) config.channelGroups = channelGroups;
+
+            if (options.set || options.file) {
+                if (options.set) {
+                    config.state = options.set;
+                } else if (fs.existsSync(options.file)) {
+                    var stateFile = fs.readFileSync(options.file, 'utf8');
+                    stateFile = JSON.parse(stateFile);
+                    config.state = stateFile;
+                }
+
+                pubnub.setState(config,
+                    function (status, response) {
+                        logObject({ status: status, response: response }, 'Setting...');
+                        if (response) {
+                            logObjectPretty(response, 'Setting State');
+                        }
+
+                    });
+            } else {
+                config.uuid = uuid;
+
+                pubnub.getState(config,
+                    function (status, response) {
+                        logObject({ status: status, response: response }, 'Getting...');
+                        if (response) {
+                            logObjectPretty(response, 'Getting State');
+                        }
+                    });
+
+            }
+
+        } catch (e) {
+            console.log(e.message);
+        }
+    });
+
+program.command('device-add [arguments...]')
+    .alias('da')
+    .option('-c, --channels <values>', 'channels to add')
+    .option('-d, --device-id <value>', 'Device Id to attach with channel')
+    .option('-t, --push-type <value>', 'Push type. gcm or apns or mpns')
+    .option('-k, --auth-key <auth_key>', 'Authentication key')
+    .option('--no-admin', 'No Administration')
+    .action(function (args, options) {
+        try {
+
+            if (!options.channels) {
+                throw new Error('Channels(-c) are required!');
+            }
+
+            if (!options.deviceId) {
+                throw new Error('Device id(-d) is required!');
+            }
+
+            if (!options.pushType) {
+                throw new Error('Push type(-t) is required!');
+            }
+
+            switch (options.pushType) {
+                case 'apns':
+                case 'mpns':
+                case 'gcm':
+                    break;
+                default:
+                    throw new Error('Push type should be one of (apns, mpns, gcm)');
+            }
+
+            var pubnub = getPubnubInstanceWithUUIDAndAuthKeyIncludingSecretKey(undefined, options.authKey, !options.noAdmin);
+
+            var config = {};
+            config.channels = options.channels.split(',');
+            config.device = options.deviceId;
+            config.pushGateway = options.pushType;
+
+            pubnub.push.addChannels(config, function (status) {
+                logObject({ status: status });
+            });
+
+        } catch (e) {
+            console.log(e.message);
+        }
+    });
+
+program.command('device-list [arguments...]')
+    .alias('dl')
+    .option('-d, --device-id <value>', 'Device Id to attach with channel')
+    .option('-t, --push-type <value>', 'Push type. gcm or apns or mpns')
+    .option('-k, --auth-key <auth_key>', 'Authentication key')
+    .option('--no-admin', 'No Administration')
+    .action(function (args, options) {
+        try {
+
+            if (!options.deviceId) {
+                throw new Error('Device id(-d) is required!');
+            }
+
+            if (!options.pushType) {
+                throw new Error('Push type(-t) is required!');
+            }
+
+            switch (options.pushType) {
+                case 'apns':
+                case 'mpns':
+                case 'gcm':
+                    break;
+                default:
+                    throw new Error('Push type should be one of (apns, mpns, gcm)');
+            }
+
+            var pubnub = getPubnubInstanceWithUUIDAndAuthKeyIncludingSecretKey(undefined, options.authKey, !options.noAdmin);
+
+            var config = {};
+            config.device = options.deviceId;
+            config.pushGateway = options.pushType;
+
+            pubnub.push.listChannels(config, function (status, response) {
+                logObject({ status: status, response: response });
+                if (response) {
+                    logObjectPretty(response);
+                }
+            });
+
+        } catch (e) {
+            console.log(e.message);
+        }
+    });
+
+program.command('device-remove [arguments...]')
+    .alias('dr')
+    .option('-c, --channels <values>', 'channels to add')
+    .option('-d, --device-id <value>', 'Device Id to attach with channel')
+    .option('-t, --push-type <value>', 'Push type. gcm or apns or mpns')
+    .option('-k, --auth-key <auth_key>', 'Authentication key')
+    .option('-a, --all', 'remove all push notification')
+    .option('--no-admin', 'No Administration')
+    .action(function (args, options) {
+        try {
+
+            if (!options.channels && !options.all) {
+                throw new Error('Channels(-c) or all option(-a) are required!');
+            }
+
+            if (!options.deviceId) {
+                throw new Error('Device id(-d) is required!');
+            }
+
+            if (!options.pushType) {
+                throw new Error('Push type(-t) is required!');
+            }
+
+            switch (options.pushType) {
+                case 'apns':
+                case 'mpns':
+                case 'gcm':
+                    break;
+                default:
+                    throw new Error('Push type should be one of (apns, mpns, gcm)');
+            }
+
+            var pubnub = getPubnubInstanceWithUUIDAndAuthKeyIncludingSecretKey(undefined, options.authKey, !options.noAdmin);
+
+            var config = {};
+            config.device = options.deviceId;
+            config.pushGateway = options.pushType;
+
+            if (options.channel) {
+                config.channels = options.channels.split(',');
+                pubnub.push.removeChannels(config, function (status) {
+                    logObject({ status: status });
+                });
+            } else {
+                pubnub.push.deleteDevice(config, function (status) {
+                    logObject({ status: status });
+                });
+            }
+
+        } catch (e) {
+            console.log(e.message);
+        }
+    });
+
+program.command('encrypt <data>')
+    .option('-k, --cipher-key <value>', 'Cipher key')
+    .action(function (data, options) {
+        try {
+
+            var pubnub = getPubnubInstanceWithUUIDAndAuthKeyIncludingSecretKey(undefined, undefined, true);
+
+            var config = {};
+            config.data = data;
+            if (options.cipherKey) config.customCipherKey = options.cipherKey;
+
+            var encrypted = pubnub.encrypt(config);
+
+            console.log("Original Data:", data);
+            console.log("Encrypted Data:", encrypted);
+
+
+        } catch (e) {
+            console.log(e.message);
+        }
+
+
+    })
+
+program.parse(process.argv);
+
+
+
+
